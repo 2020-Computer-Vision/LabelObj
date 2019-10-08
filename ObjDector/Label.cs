@@ -46,6 +46,24 @@ namespace ObjDector
 
         public LabelBox Box;
 
+        public Label()
+        {
+        }
+
+        /// <summary>
+        /// Deepcopy the Label
+        /// </summary>
+        /// <param name="label"></param>
+        public Label(Label label)
+        {
+            Id = label.Id;
+            Name = label.Name;
+            X = label.X;
+            Y = label.Y;
+            Width = label.Width;
+            Height = label.Height;
+        }
+
         public Rect GetCanvasRect()
         {
             return new Rect(X - 0.5 * Width, Y - 0.5 * Height, Width, Height);

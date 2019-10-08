@@ -1,10 +1,9 @@
-﻿using NHotkey;
-using NHotkey.Wpf;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Timers;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Forms;
@@ -14,16 +13,17 @@ using System.Windows.Media.Imaging;
 
 using Brushes = System.Windows.Media.Brushes;
 
-/**
- * TODO:
- * Auto save
- */
-
 namespace ObjDector
 {
     public partial class MainWindow : Window
     {
+        private delegate bool HotkeyEventEventHandler(string name);
+
         private MTObservableCollection<Label> labelsList = new MTObservableCollection<Label>();
+
+        private List<Label> persistentLabels = new List<Label>();
+
+        private List<Label> clipboardLabels = new List<Label>();
 
         private MTObservableCollection<LabelClass> classesList = new MTObservableCollection<LabelClass>();
 
@@ -77,6 +77,11 @@ namespace ObjDector
 
         private Dictionary<int, Bitmap> decodedFrame = new Dictionary<int, Bitmap>();
 
+        private Dictionary<Key, Tuple<string, HotkeyEventEventHandler, bool>> _hotkeymap = 
+            new Dictionary<Key, Tuple<string, HotkeyEventEventHandler, bool>>();
+
+        private System.Windows.Threading.DispatcherTimer autoSaveTimer = null;
+
         #region Misc Functions
         private void InfoBox(string message)
         {
@@ -104,7 +109,8 @@ namespace ObjDector
 ""ESC"": Cancel ""New label mode""
 ""D"": Next frame
 ""A"": Previous frame
-""Delete"": Remove all selected label
+""Delete"": Remove all selected labels
+""Ctrl+C/V"": Copy and paste selected labels
 ");
         }
 
@@ -123,6 +129,22 @@ namespace ObjDector
                 return bitmapimage;
             }
         }
+
+        private void AddHotKeys(String name, Key key, ModifierKeys mod, HotkeyEventEventHandler handler)
+        {
+            try
+            {
+                if (_hotkeymap.ContainsKey(key))
+                {
+                    throw new Exception($"Key:\"{key}\" was already in used.");
+                }
+                _hotkeymap[key] = new Tuple<string, HotkeyEventEventHandler, bool>(name, handler, true);
+            }
+            catch (Exception err)
+            {
+                ErrorBox("HOTKEY: " + err.Message);
+            }
+        }
         #endregion
 
         public MainWindow()
@@ -131,19 +153,49 @@ namespace ObjDector
 
             FFmpegBinariesHelper.RegisterFFmpegBinaries();
 
+            autoSaveTimer = new System.Windows.Threading.DispatcherTimer();
+            autoSaveTimer.Tick += new EventHandler(OnAutoSave);
+            autoSaveTimer.Interval = new TimeSpan(0, 0, 5);
+            autoSaveTimer.Start();
+
             labelListView.ItemsSource = labelsList;
             classListView.ItemsSource = classesList;
 
-            HotkeyManager.Current.AddOrReplace("next", Key.D, ModifierKeys.None, 
-                (object sender, HotkeyEventArgs e) => GotoFrame(currentFrame + 1));
-
-            HotkeyManager.Current.AddOrReplace("prev", Key.A, ModifierKeys.None,
-                (object sender, HotkeyEventArgs e) => GotoFrame(currentFrame - 1));
-
-            foreach (var name in new string[] { "ball", "strike_zone", "plate" })
+            AddHotKeys("next", Key.D, ModifierKeys.None, name =>
             {
-                AddLabelClass(name);
+                GotoFrame(currentFrame + 1);
+                return true;
+            });
+            AddHotKeys("prev", Key.A, ModifierKeys.None, name =>
+            {
+                GotoFrame(currentFrame - 1);
+                return true;
+            });
+
+            try
+            {
+                foreach (string line in File.ReadLines("config.ini"))
+                {
+                    var tokens = line.Trim().Split(',');
+                    if (tokens.Length == 0 || tokens[0].StartsWith("//"))
+                    {
+                        continue;
+                    }
+
+                    AddLabelClass(tokens[0], tokens.Length > 1 && tokens[1] == "1");
+                }
             }
+            catch (Exception e)
+            {
+                status = $"Unable to load config file. Error: {e.Message}";
+            }
+
+            if (classesList.Count == 0)
+            {
+                ErrorBox("No class was loaded.");
+                AddLabelClass("Label_1");
+            }
+
             currentLable = classesList[0].Classname;
 
             labelCanvas.ParentWindow = this;
@@ -187,6 +239,9 @@ namespace ObjDector
                 return;
             }
 
+            var persisLabels = new List<Label>(persistentLabels);
+            persistentLabels.Clear();
+
             Bitmap frame;
             if (!decodedFrame.TryGetValue(target, out frame))
             {
@@ -214,6 +269,22 @@ namespace ObjDector
 
             SaveLabel(currentFrame);
             LoadLabel(target);
+
+            // only auto add when we seek to next frame
+            if (target == currentFrame + 1)
+            {
+                foreach (var label1 in persisLabels)
+                {
+                    Label label = new Label(label1);
+                    Rect rect = label.GetCanvasRect();
+                    label.Id = target;
+                    label.Box = labelCanvas.AddUniLabelBox(rect, label.Name, colors[label.Name]);
+                    label.Box.IsShowThumb = false;
+                    labelsList.Add(label);
+
+                    persistentLabels.Add(label);
+                }
+            }
 
             videoPlayer.Source = BitmapToImageSource(frame);
             currentFrame = target;
@@ -334,6 +405,11 @@ namespace ObjDector
             label.Y = Canvas.GetTop(labelBox) / labelCanvas.ActualHeight + label.Height * 0.5;
 
             labelsList.Add(label);
+
+            if (classesList.Any(x => x.IsPersistent && x == currentLable))
+            {
+                persistentLabels.Add(label);
+            }
         }
 
         private void CreateNewbox_CanExecute(object sender, CanExecuteRoutedEventArgs e)
@@ -363,11 +439,10 @@ namespace ObjDector
         {
             e.CanExecute = mediaFile != null;
         }
-
+        
         private void DeleteBox_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            var selected = labelCanvas.GetSelectedBox();
-            foreach (var box in selected)
+            foreach (var box in labelCanvas.GetSelectedBox())
             {
                 for (int i = 0; i < labelsList.Count; ++i)
                 {
@@ -381,17 +456,74 @@ namespace ObjDector
             }
         }
 
-        private void OnNewLabelWithClass(object sender, HotkeyEventArgs e)
+        private void CopyBox_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
+            e.CanExecute = mediaFile != null;
+        }
+
+        private void CopyBox_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            clipboardLabels.Clear();
+            foreach (var box in labelCanvas.GetSelectedBox())
+            {
+                for (int i = 0; i < labelsList.Count; ++i)
+                {
+                    if (labelsList[i].Box == box)
+                    {
+                        clipboardLabels.Add(new Label(labelsList[i]));
+                    }
+                }
+            }
+            status = $"Copied {clipboardLabels.Count} boxes.";
+        }
+
+        private void PasteBox_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = clipboardLabels.Count > 0;
+        }
+
+        private void PasteBox_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            foreach (var label in clipboardLabels)
+            {
+                Rect rect = label.GetCanvasRect();
+                label.Id = currentFrame;
+                label.Box = labelCanvas.AddUniLabelBox(rect, label.Name, colors[label.Name]);
+                label.Box.IsShowThumb = false;
+                labelsList.Add(label);
+            }
+        }
+
+        private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            e.Handled = false;
+            if (!_hotkeymap.ContainsKey(e.Key))
+            {
+                return;
+            }
+
+            var (name, handler, enabled) = _hotkeymap[e.Key];
+            if (handler != null && enabled)
+            {
+                e.Handled = handler(name);
+            }
+        }
+
+        private bool OnNewLabelWithClass(string name)
+        {
+            if (gotoTarget.IsFocused)
+            {
+                return false;
+            }
+
             if (mediaFile != null)
             {
-                currentLable = e.Name;
+                currentLable = name;
                 labelCanvas.InitNewLabelBox((System.Windows.Point point) 
                     => (currentLable, colors[currentLable]), OnLabelBoxFinished);
                 status = $"New label: {currentLable}";
             }
-
-            e.Handled = true;
+            return true;
         }
 
         private void ClassListView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
@@ -446,12 +578,13 @@ namespace ObjDector
             }
         }
 
-        private void AddLabelClass(string classname)
+        private void AddLabelClass(string classname, bool persistent = false)
         {
             int i = classesList.Count;
-            HotkeyManager.Current.AddOrReplace(classname, Key.D1 + i, ModifierKeys.None, OnNewLabelWithClass);
+            // HotkeyManager.Current.AddOrReplace(classname, Key.D1 + i, ModifierKeys.None, OnNewLabelWithClass);
+            AddHotKeys(classname, Key.D1 + i, ModifierKeys.None, OnNewLabelWithClass);
             colors[classname] = ColorSchem[i];
-            classesList.Add(new LabelClass(++i, classname));
+            classesList.Add(new LabelClass(++i, classname, persistent));
         }
 
         private void LoadLabelFile(string filename)
@@ -509,8 +642,6 @@ namespace ObjDector
                     file.WriteLine(label);
                 }
             }
-
-            InfoBox("Label file was saved.");
         }
 
         private void LoadLable_Click(object sender, RoutedEventArgs e)
@@ -554,7 +685,21 @@ namespace ObjDector
                 }
 
                 SaveLabelFile(saveFileDialog.FileName);
+                InfoBox("Label file was saved.");
             }
+        }
+
+        private void OnAutoSave(object source, EventArgs e)
+        {
+            if (mediaFile == null)
+            {
+                return;
+            }
+
+            Path.GetDirectoryName(mediaFile.filepath);
+            var filename = Path.GetFileNameWithoutExtension(mediaFile.filepath) + ".autosave";
+            SaveLabelFile(filename);
+            status = "Lable file was auto saved.";
         }
     }
 }

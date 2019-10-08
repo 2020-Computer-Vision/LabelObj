@@ -33,15 +33,30 @@ namespace ObjDector
             }
         }
 
+        /// <summary>
+        /// If last frame has it, then auto add to next frame
+        /// </summary>
+        /// <param name="isPersistent"></param>
+        private bool isPersistent;
+        public bool IsPersistent
+        {
+            get { return isPersistent; }
+            set {
+                isPersistent = value;
+                OnPropertyChanged(new PropertyChangedEventArgs("IsPersistent"));
+            }
+        }
+
         public LabelClass(string name)
         {
             Classname = name;
         }
 
-        public LabelClass(int _id, string name)
+        public LabelClass(int _id, string name, bool persistent)
         {
             Id = _id;
             Classname = name;
+            IsPersistent = persistent;
         }
 
         public static bool operator ==(LabelClass cls1, string str)

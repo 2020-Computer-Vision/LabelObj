@@ -5,11 +5,14 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:s="clr-namespace:ObjDector"
         mc:Ignorable="d"
-        Title="ObjDector Label" Height="650" Width="1200" WindowStartupLocation="CenterScreen">
+        Title="ObjDector Label" Height="650" Width="1200" WindowStartupLocation="CenterScreen"
+        KeyDown="Window_KeyDown">
     <Window.Resources>
         <RoutedUICommand x:Key="CreateNewbox" Text="Create new label box" />
         <RoutedUICommand x:Key="CancelNewbox" Text="Cancel new label box" />
         <RoutedUICommand x:Key="DeleteBox" Text="Delete label box" />
+        <RoutedUICommand x:Key="CopyBox" Text="Copy label box" />
+        <RoutedUICommand x:Key="PasteBox" Text="Copy label box" />
 
         <!-- MoveThumb Template -->
         <ControlTemplate x:Key="MoveThumbTemplate" TargetType="{x:Type s:MoveThumb}">
@@ -53,6 +56,8 @@
         <KeyBinding Key="W" Command="{StaticResource CreateNewbox}"/>
         <KeyBinding Key="Esc" Command="{StaticResource CancelNewbox}"/>
         <KeyBinding Key="Delete" Command="{StaticResource DeleteBox}"/>
+        <KeyBinding Key="C" Modifiers="Ctrl" Command="{StaticResource CopyBox}"/>
+        <KeyBinding Key="V" Modifiers="Ctrl" Command="{StaticResource PasteBox}"/>
     </Window.InputBindings>
 
     <Window.CommandBindings>
@@ -67,6 +72,14 @@
         <CommandBinding Command="{StaticResource DeleteBox}"
                     CanExecute="DeleteBox_CanExecute"
                     Executed="DeleteBox_Executed"/>
+
+        <CommandBinding Command="{StaticResource CopyBox}"
+                    CanExecute="CopyBox_CanExecute"
+                    Executed="CopyBox_Executed"/>
+
+        <CommandBinding Command="{StaticResource PasteBox}"
+                    CanExecute="PasteBox_CanExecute"
+                    Executed="PasteBox_Executed"/>
     </Window.CommandBindings>
 
     <Grid>
@@ -124,9 +137,16 @@
                 <ListView Grid.Column="0" Grid.Row="1" x:Name="classListView" MouseDoubleClick="ClassListView_MouseDoubleClick">
                     <ListView.View>
                         <GridView>
-                            <GridViewColumn Header="ID" Width="50" DisplayMemberBinding="{Binding Path=Id}">
+                            <GridViewColumn Header="" Width="30">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <CheckBox IsChecked="{Binding Path=IsPersistent}"></CheckBox>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="Class" Width="140" DisplayMemberBinding="{Binding Path=Classname}">
+                            <GridViewColumn Header="ID" Width="40" DisplayMemberBinding="{Binding Path=Id}">
+                            </GridViewColumn>
+                            <GridViewColumn Header="Class" Width="120" DisplayMemberBinding="{Binding Path=Classname}">
                             </GridViewColumn>
                         </GridView>
                     </ListView.View>
